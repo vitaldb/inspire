@@ -29,6 +29,7 @@ icd9_to_icd10_file = 'icd9toicd10pcs.csv'
 # mapping file
 opid_mapping_file = 'opid_mapping.csv'
 hid_mapping_file = 'hid_mapping.csv'
+hadm_mapping_file = 'hadm_mapping.csv'
 
 DTSTART = '2011-01-01'
 DTEND = '2011-01-31'
@@ -68,7 +69,7 @@ def icd9_to_icd10_code():
 def convert_to_relative_time(orin, dt):
     min = (dt-orin).total_seconds() / 60
     if np.isnan(min):
-        return 'x'
+        return ''
     else:
         return round(min/5)*5
 
@@ -101,7 +102,6 @@ def deidentified_data(dataframe):
     mapping_opid_df = pd.read_csv(opid_mapping_file, dtype={'opid':float})
     mapping_opid_dict = dict(mapping_opid_df.values)
     dataframe['opid'] = dataframe['opid'].map(mapping_opid_dict)
-    # dataframe.replace({'opid':mapping_opid_dict}, inplace=True)
     
     # deidentified hid
     if 'subject_id' in dataframe.columns:
@@ -131,13 +131,49 @@ def deidentified_data(dataframe):
         mapping_hid_df.to_csv(hid_mapping_file, index=False)
     else:
         dfresult = dataframe
-    return dfresult
+        
+    if 'hadm_id' in dfresult.columns:
+        dfhadm = dfresult[['subject_id','admissiontime']].drop_duplicates()
+        try: 
+            mapping_hadm_df = pd.read_csv(hadm_mapping_file, parse_dates=['admission_date'])
+        except:
+            mapping_hadm_df = pd.DataFrame(columns=['dehid','admission_date', 'hid_adm', 'deadm'])
+            
+        dfresult2 = dfresult.copy()
+        for col in dfhadm[['subject_id','admissiontime']].values:
+            hid = col[0]
+            adm = col[1]
+            
+            hid_adm = str(hid) + str(adm)
+            
+            if hid_adm in mapping_hadm_df['hid_adm'].values:
+                deadm = mapping_hadm_df.loc[mapping_hadm_df['hid_adm']==hid_adm, 'deadm'].values[0]
+                dfresult2.loc[(dfresult2['subject_id']==hid) & (dfresult2['admissiontime']==adm), 'hadm_id'] = deadm     
+                continue            
+            else:
+                deadm = random.randint(1, 10**8) + 2*10**8
+                while deadm in mapping_hadm_df['deadm'].values:
+                    deadm = random.randint(10**8) + 2*10**8
+                    if deadm not in mapping_hadm_df['deadm'].values:
+                        mapping_hadm_df = mapping_hadm_df.append({'dehid':hid, 'admission_date':adm, 'hid_adm':hid_adm, 'deadm':deadm}, ignore_index=True)
+                        dfresult2.loc[(dfresult2['subject_id']==hid) & (dfresult2['admissiontime']==adm), 'hadm_id'] = deadm           
+                        break
+                else:
+                    mapping_hadm_df = mapping_hadm_df.append({'dehid':hid, 'admission_date':adm, 'hid_adm':hid_adm, 'deadm':deadm}, ignore_index=True)
+                    dfresult2.loc[(dfresult2['subject_id']==hid) & (dfresult2['admissiontime']==adm), 'hadm_id'] = deadm     
+        
+        mapping_hadm_df.to_csv(hadm_mapping_file, index=False)
+    else:
+        dfresult2 = dfresult    
+        
+                
+    return dfresult2
 
 # make operations table
 def make_operations_table(dtstart, dtend):
-    col_list = ['opid', 'subject_id', 'orin', 'outtime', 'anstarttime', 'anendtime', 'opstarttime', 'opendtime', 'admissiontime', 'dischargetime', 'death_inhosp', 'age', 'gender', 'height', 'weight', 'asa', 'emop', 'department', 'dx', 'opname', 'opcode', 'anesthesia', 'caseid']
+    col_list = ['opid', 'subject_id', 'orin', 'outtime', 'anstarttime', 'anendtime', 'opstarttime', 'opendtime', 'admissiontime', 'dischargetime', 'deathtime_inhosp', 'age', 'gender', 'height', 'weight', 'asa', 'emop', 'department', 'icd10_pcs', 'anesthesia', 'caseid']
 
-    sql = f'SELECT opid, hid, orin, orout, aneinfo_anstart, aneinfo_anend, opstart, opend, admission_date, discharge_date, death_time, ROUND(age,-1), sex, height, weight, premedi_asa, em_yn, dept, diagnosis, opname, replace(icd9_cm_code, ".", ""), aneinfo_anetype, caseid FROM operations WHERE opid > {dtstart} and opid < {dtend} and age >= 18 and age <= 90 and anetype != "국소" and orin IS NOT NULL and orout IS NOT NULL and admission_date IS NOT NULL and discharge_date IS NOT NULL and grp = "OR"'
+    sql = f'SELECT opid, hid, orin, orout, aneinfo_anstart, aneinfo_anend, opstart, opend, admission_date, discharge_date, death_time, ROUND(age,-1), sex, height, weight, premedi_asa, em_yn, dept, replace(icd9_cm_code, ".", ""), aneinfo_anetype, caseid FROM operations WHERE opid > {dtstart} and opid < {dtend} and age >= 18 and age <= 90 and anetype != "국소" and orin IS NOT NULL and orout IS NOT NULL and admission_date IS NOT NULL and discharge_date IS NOT NULL and grp = "OR"'
 
     cur.execute(sql)
     dfor = pd.DataFrame(cur.fetchall(), columns=col_list).fillna('')
@@ -147,18 +183,15 @@ def make_operations_table(dtstart, dtend):
                         'anendtime':'datetime64[ns]',
                         'opstarttime':'datetime64[ns]',
                         'opendtime':'datetime64[ns]',
-                        'death_inhosp':'datetime64[ns]'
+                        'deathtime_inhosp':'datetime64[ns]'
                         })
     
-    # add hadm_hid (random)
-    dfhadm = dfor[['subject_id','admissiontime']].drop_duplicates()
-    hadmlist = [random.randint(0,100000000) for val in range (0, len(dfhadm))] #### 수정 필요 
-    dfhadm['hadm_id'] = hadmlist
-    dfor = pd.merge(dfor, dfhadm, how='left', on=['subject_id','admissiontime'])
+    # add column : hadm_hid (random)
+    dfor['hadm_id'] = ''
     
     # replace 9 with 10
     dicticd = icd9_to_icd10_code()
-    dfor.replace({'opcode': dicticd}, inplace=True) # operations 재생성 필요
+    dfor.replace({'icd10_pcs': dicticd}, inplace=True) # operations 재생성 필요
         
     return dfor
 
@@ -304,7 +337,7 @@ labevents_df = deidentified_data(labevents_df)
 diagnosis_df = deidentified_data(diagnosis_df)
 
 # operations_df replace time
-convert_col_list = ['outtime','anstarttime','anendtime','opstarttime','opendtime','admissiontime','dischargetime','death_inhosp']
+convert_col_list = ['outtime','anstarttime','anendtime','opstarttime','opendtime','admissiontime','dischargetime','deathtime_inhosp']
 for col in convert_col_list:
     operations_df[col] = operations_df.apply(lambda x: convert_to_relative_time(x['orin'], x[col]), axis=1) 
 operations_df.drop(['orin'], axis=1, inplace=True)
