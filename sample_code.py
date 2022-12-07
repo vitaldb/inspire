@@ -63,23 +63,23 @@ def make_vital_dictionary():
 # replace icd9 to icd10
 def icd9_to_icd10_code():
     dficd = pd.read_csv(icd9_to_icd10_file).astype(str)
-    dficd['icd10cm'] = dficd['icd10cm'].str[:4]  
+    dficd['icd10cm'] = dficd['icd10cm'].str[:4]
     dicticd = dict(dficd.drop_duplicates(subset='icd9cm')[['icd9cm','icd10cm']].values) 
-
+    
     return dicticd
 
 # replace anetype name
 def replace_anetype(ane):
     if ane == 'General':
-        return 'G'
+        return 'General'
     elif ane == 'Spinal':
-        return 'S'
+        return 'Spinal'
     elif ane == 'Epidural':
-        return 'E'
+        return 'Epidural'
     elif ane == 'Combined (S,E)':
-        return 'C'
+        return 'Combined'
     elif ane == 'MAC':
-        return 'M'
+        return 'MAC'
     else:
         return ''
 
@@ -90,14 +90,6 @@ def replace_int(row):
     except:
         return(0)
 
-# convert to relative time based on orin
-def convert_to_relative_time(orin, dt):
-    min = (dt-orin).total_seconds() / 60
-    if np.isnan(min):
-        return ''
-    else:
-        return round(min/5)*5
-
 # if the data is within the check-in time, 1
 def extract_wanted_period(admission_date, recorddate, discharge_date):
     if (admission_date<=recorddate) & (recorddate<=discharge_date):
@@ -105,15 +97,13 @@ def extract_wanted_period(admission_date, recorddate, discharge_date):
     else:
         return 0   
 
-# preprocess datetime (extract wanted period & convert to relative time)
-def preprocess_datetime(dfdata, dfor, starttime, endtime):
-    dfmerge = pd.merge(dfdata, dfor[['opid', 'orin', 'subject_id', 'admissiontime','dischargetime']], how='left', on = 'subject_id') 
-    dfmerge['dcnote'] = dfmerge.apply(lambda x: extract_wanted_period(x[starttime], x['charttime'], x[endtime]), axis=1)
-    dfresult = dfmerge[dfmerge.dcnote == 1]
-    dfresult['charttime'] = dfresult.apply(lambda x: convert_to_relative_time(x['orin'], x['charttime']), axis=1)
-    dfresult.drop(['admissiontime','dischargetime', 'dcnote'], axis=1, inplace=True)    
-    
-    return dfresult
+# convert to relative time based on orin
+def convert_to_relative_time(orin, dt):
+    min = (dt-orin).total_seconds() / 60
+    if np.isnan(min):
+        return ''
+    else:
+        return round(min/5)*5
 
 # remove data other than real numbers
 def extract_float(x):
@@ -320,6 +310,63 @@ def make_diagnosis_table(dfor):
         
     return dfresult
 
+def make_vital_labeling():
+    # 1. cpb on/off labeling
+    path = 'cpb_time_data.xlsx'
+    dfcpb = pd.read_excel(path, usecols= ['환자번호','서식작성일','진료서식구성원소ID','서식내용'], skiprows=1, parse_dates=['서식작성일'])
+
+    cpbmax = dfcpb.groupby(['환자번호','서식작성일'], as_index=False)['진료서식구성원소ID'].max() 
+    cpbmin = dfcpb.groupby(['환자번호','서식작성일'], as_index=False)['진료서식구성원소ID'].min() 
+    
+    dfmax = pd.merge(cpbmax, dfcpb, on = ['환자번호','서식작성일','진료서식구성원소ID']) 
+    dfmin = pd.merge(cpbmin, dfcpb, on = ['환자번호','서식작성일','진료서식구성원소ID']) 
+    
+    dfmax['서식항목명'] = 'cpb off'
+    dfmin['서식항목명'] = 'cpb on'
+    
+    dfcpb = dfmax.append(dfmin, ignore_index=True).sort_values(['서식작성일'])
+    
+    operations_df['opdate'] = operations_df['orin'].dt.date
+    
+    cpbopid = pd.merge(dfcpb, operations_df[['opid','subject_id','opdate','orin']], how='left',  left_on=['환자번호','dt'], right_on=['subject_id','opdate'])
+    
+    test = cpbopid[cpbopid['opdate'].notnull()]
+    
+    test['서식내용'] = test['서식내용'].replace('/', ':', regex=True).replace('24:', '0:', regex=True)
+    
+    dfresult = pd.DataFrame(columns=['opid','charttime','itemname','value'])
+    for col in test[['opid','orin']].drop_duplicates().values  :
+        timedict = dict()
+        opid = col[0]
+        orin = col[1]
+        
+        data = test[test['opid']==opid]
+        data['dt'] = pd.to_datetime(data['orin'].dt.date.astype(str)  + ' ' + data['서식내용'])
+        
+        timedict['orin'] = orin
+        
+        timedict.update(dict(data[['서식항목명','dt']].values))
+        
+        if timedict['cpb on'] < timedict['orin']:
+            timedict['cpb on'] = timedict['cpb on'] + timedelta(days=1)
+        if timedict['cpb off'] < timedict['orin']:
+            timedict['cpb off'] = timedict['cpb off'] + timedelta(days=1)
+        
+        test2 = pd.DataFrame.from_records([timedict], index=['time'])
+    
+        test2['cpb on'] = test2.apply(lambda x: convert_to_relative_time(x['orin'], x['cpb on']), axis=1)
+        test2['cpb off'] = test2.apply(lambda x: convert_to_relative_time(x['orin'], x['cpb off']), axis=1)
+        
+        result = pd.DataFrame(range(test2['cpb on'].values[0], test2['cpb off'].values[0]+1,5), columns=['charttime']) 
+        
+        result[['opid', 'itemname', 'value']]=[opid, 'cpb', 1]
+        
+        dfresult = dfresult.append(result, ignore_index=True)
+        print(dfresult)        
+    
+    # 2. crrt, ecmo
+    # sql = "SELECT DISTINCT(hid) FROM `admissions` where icuin > '2019-01-01' and icuout < '2021-12-31'"
+        
 if not os.path.exists(operations_pickle_file):
     print('making...', operations_pickle_file)
     operations_df = make_operations_table(dtstart, dtend)
