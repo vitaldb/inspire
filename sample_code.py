@@ -133,75 +133,55 @@ def deidentified_data(df):
         try:
             mapping_hid_df = pd.read_csv(hid_mapping_file) 
             mapping_hid_dict = dict(mapping_hid_df.values)
-            df['dehid'] = df['subject_id'].map(mapping_hid_dict)
         except:
-            mapping_hid_df = pd.DataFrame(columns=['hid', 'dehid'])
-            df['dehid'] = pd.Series()
+            mapping_hid_df = dict()
             
-        dfresult = df.copy()
-        for hid in df.loc[df['dehid'].isnull(),'subject_id'].values:
-            if hid in mapping_hid_df['hid'].values: # if subject_id already exists, get from mapping list
-                dehid = mapping_hid_df.loc[mapping_hid_df['hid']==hid, 'dehid'].values[0]
-                dfresult.loc[dfresult['subject_id']==hid, 'dehid'] = dehid
-                continue
-            else:
+        for hid in list(set(df['subject_id'])-set(mapping_hid_dict.keys())):
+            dehid = random.randint(1, 10**8) + 1*10**8
+            while dehid in mapping_hid_dict.values():
                 dehid = random.randint(1, 10**8) + 1*10**8
-                while dehid in mapping_hid_df['dehid'].values: 
-                    dehid = random.randint(1, 10**8) + 1*10**8
-                    if dehid not in mapping_hid_df['dehid'].values: # dehid must not be in the mapping list
-                        mapping_hid_df = mapping_hid_df.append({'hid':hid, 'dehid':dehid}, ignore_index=True)
-                        dfresult.loc[dfresult['subject_id']==hid, 'dehid'] = dehid        
-                        break
-                else:
-                    mapping_hid_df = mapping_hid_df.append({'hid':hid, 'dehid':dehid}, ignore_index=True)
-                    dfresult.loc[dfresult['subject_id']==hid, 'dehid'] = dehid        
-                        
-        dfresult['subject_id'] = dfresult['dehid']
+                if dehid not in mapping_hid_dict.values():
+                    mapping_hid_dict[hid] = dehid
+                    break
+            else: 
+                mapping_hid_dict[hid] = dehid
+        
+        df['dehid'] = df['subject_id'].map(mapping_hid_dict)
+            
+        mapping_hid_df = pd.DataFrame.from_dict(mapping_hid_dict, orient='index').reset_index()
+        mapping_hid_df.columns = ['hid', 'dehid']
         mapping_hid_df.to_csv(hid_mapping_file, index=False)
-    else:
-        dfresult = df
-    
     
     # deidentified hadm_id
     print('hadm_id...', end='')
-    if 'hadm_id' in dfresult.columns:
-        dfhadm = dfresult[['subject_id','admissiontime']].drop_duplicates()
+    df['hid_adm'] = df['subject_id'].astype(str) + ' ' + df['admissiontime'].astype(str)
+    if 'hadm_id' in df.columns:
         try: 
-            mapping_hadm_df = pd.read_csv(hadm_mapping_file, parse_dates=['admission_date'])
-            mapping_hid_dict = dict(mapping_hadm_df.values)
-            dfresult['dehid'] = dfresult['subject_id'].map(mapping_hid_dict)
+            mapping_hadm_df = pd.read_csv(hadm_mapping_file)
+            mapping_hadm_dict = dict(mapping_hadm_df.values)
         except:
-            mapping_hadm_df = pd.DataFrame(columns=['dehid','admission_date', 'hid_adm', 'deadm'])
-            
-        dfresult2 = dfresult.copy()
-        for col in dfhadm[['subject_id','admissiontime']].values:
-            hid = col[0]
-            adm = col[1]
-            
-            hid_adm = str(hid) + str(adm) # combination of hid and adm is on pair
-            
-            if hid_adm in mapping_hadm_df['hid_adm'].values:  # if hid_adm already exists, get from mapping list
-                deadm = mapping_hadm_df.loc[mapping_hadm_df['hid_adm']==hid_adm, 'deadm'].values[0]
-                dfresult2.loc[(dfresult2['subject_id']==hid) & (dfresult2['admissiontime']==adm), 'hadm_id'] = deadm     
-                continue            
-            else:
-                deadm = random.randint(1, 10**8) + 2*10**8
-                while deadm in mapping_hadm_df['deadm'].values:
-                    deadm = random.randint(1, 10**8) + 2*10**8
-                    if deadm not in mapping_hadm_df['deadm'].values: # deadm must not be in the mapping list
-                        mapping_hadm_df = mapping_hadm_df.append({'dehid':hid, 'admission_date':adm, 'hid_adm':hid_adm, 'deadm':deadm}, ignore_index=True)
-                        dfresult2.loc[(dfresult2['subject_id']==hid) & (dfresult2['admissiontime']==adm), 'hadm_id'] = deadm           
-                        break
-                else:
-                    mapping_hadm_df = mapping_hadm_df.append({'dehid':hid, 'admission_date':adm, 'hid_adm':hid_adm, 'deadm':deadm}, ignore_index=True)
-                    dfresult2.loc[(dfresult2['subject_id']==hid) & (dfresult2['admissiontime']==adm), 'hadm_id'] = deadm     
+            mapping_hadm_dict = dict()
         
-        mapping_hadm_df.to_csv(hadm_mapping_file, index=False)
-    else:
-        dfresult2 = dfresult    
+        for hid_adm in set((df['hid_adm']).drop_duplicates().values) - set(mapping_hadm_dict.keys()):
+            deadm = random.randint(1, 10**8) + 2*10**8
+            while deadm in mapping_hadm_dict.values():
+                deadm = random.randint(1, 10**8) + 2*10**8
+                if deadm not in mapping_hadm_dict.values():
+                    mapping_hadm_dict[hid_adm] = deadm
+                    break
+            else:
+                mapping_hadm_dict[hid_adm] = deadm
+                
+        df['hadm_id'] = df['hid_adm'].map(mapping_hadm_dict)
+        
+        mapping_hadm_df = pd.DataFrame.from_dict(mapping_hadm_dict, orient='index').reset_index()
+        mapping_hadm_df.columns = ['hid_adm', 'hadm_id']
+        mapping_hadm_df.to_csv(hadm_mapping_file, index=False) 
 
-    print('done')        
-    return dfresult2
+    df['subject_id'] = df['dehid']
+    print('done')
+            
+    return df
 
 # make operations table
 def make_operations_table(dtstart, dtend):
@@ -227,6 +207,8 @@ def make_operations_table(dtstart, dtend):
     dicticd, dictapproach = icd9_to_icd10_code()
     dfor['approach'] = dfor['icd10_pcs'].map(dictapproach)
     dfor.loc[dfor['opname'].str.contains('robot|laparo|hystero', na=False, case=False), 'approach'] = 'videoscope'
+    dfor['approach'].fillna('open', inplace=True)
+    
     dfor['icd10_pcs'] = dfor['icd10_pcs'].map(dicticd)
     
     # replace anetype title
@@ -511,34 +493,34 @@ else:
     print('using...', vitals_pickle_file)
     vitals_df = pickle.load(open(vitals_pickle_file, 'rb'))
     
-# if not os.path.exists(ward_vitals_pickle_file):
-#     print('making...', ward_vitals_pickle_file)
-#     ward_vitals_df = make_ward_vitals_table(operations_df)
-#     pickle.dump(ward_vitals_df, open(ward_vitals_pickle_file, 'wb'))
-#     print(ward_vitals_df)
-# else: 
-#     print('using...', ward_vitals_pickle_file)
-#     ward_vitals_df = pickle.load(open(ward_vitals_pickle_file, 'rb'))
+if not os.path.exists(ward_vitals_pickle_file):
+    print('making...', ward_vitals_pickle_file)
+    ward_vitals_df = make_ward_vitals_table(operations_df)
+    pickle.dump(ward_vitals_df, open(ward_vitals_pickle_file, 'wb'))
+    print(ward_vitals_df)
+else: 
+    print('using...', ward_vitals_pickle_file)
+    ward_vitals_df = pickle.load(open(ward_vitals_pickle_file, 'rb'))
 
-# merge ward_vitals & vitals 
-# vitals_df = vitals_df.append(ward_vitals_df, ignore_index=True)
-# vitals_df = vitals_df.astype({'value':float})
-# vitals_df = vitals_df.groupby(['opid', 'charttime', 'itemname'], as_index=False).median()
+merge ward_vitals & vitals 
+vitals_df = vitals_df.append(ward_vitals_df, ignore_index=True)
+vitals_df = vitals_df.astype({'value':float})
+vitals_df = vitals_df.groupby(['opid', 'charttime', 'itemname'], as_index=False).median()
 
 # # deidentified data
 operations_df = deidentified_data(operations_df)
-# vitals_df = deidentified_data(vitals_df)
-# labevents_df = deidentified_data(labevents_df)
-# diagnosis_df = deidentified_data(diagnosis_df)
+vitals_df = deidentified_data(vitals_df)
+labevents_df = deidentified_data(labevents_df)
+diagnosis_df = deidentified_data(diagnosis_df)
 
 # operations_df replace time
 convert_col_list = ['outtime','anstarttime','anendtime','opstarttime','opendtime','admissiontime','dischargetime','deathtime_inhosp']
 for col in convert_col_list:
     operations_df[col] = operations_df.apply(lambda x: convert_to_relative_time(x['orin'], x[col]), axis=1) 
-operations_df.drop(['orin'], axis=1, inplace=True)
+operations_df.drop(['orin', 'dehid', 'hid_adm', 'opname'], axis=1, inplace=True)
 
 # save test file
 operations_df.to_csv('201101_operations_test.csv', index=False, encoding='utf-8-sig')
-# vitals_df.to_csv('201101_vitals_test.csv', index=False, encoding='utf-8-sig')
-# labevents_df.to_csv('201101_labevents_test.csv', index=False, encoding='utf-8-sig')
-# diagnosis_df.to_csv('201101_diagnosis_test.csv', index=False, encoding='utf-8-sig')
+vitals_df.to_csv('201101_vitals_test.csv', index=False, encoding='utf-8-sig')
+labevents_df.to_csv('201101_labevents_test.csv', index=False, encoding='utf-8-sig')
+diagnosis_df.to_csv('201101_diagnosis_test.csv', index=False, encoding='utf-8-sig')
