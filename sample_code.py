@@ -64,19 +64,16 @@ def make_vital_dictionary():
 # replace icd9 to icd10
 def icd9_to_icd10_code():
     dficd = pd.read_csv(icd9_to_icd10_file).astype(str)
-    
-    # for approach column  
-    dficd.loc[dficd['icd10cm'].str[4]!='0', 'approach'] = 'videoscope'
-    dficd['approach'].fillna('open', inplace=True)
-    
+    dficd['icd10code'] = dficd['icd10cm'] ############
+
     # for icd10_pcs column
-    dficd['icd10cm'] = dficd['icd10cm'].str[:4]
-    dficd.loc[dficd['icd10cm']=='NoPC', 'icd10cm'] = ''
+    dficd['icd10cm'] = dficd['icd10cm'].str[:5]
+    dficd.loc[dficd['icd10cm']=='NoPCS', 'icd10cm'] = None
     
-    dictapproach = dict(dficd.drop_duplicates(subset='icd9cm')[['icd9cm','approach']].values) 
     dicticd = dict(dficd.drop_duplicates(subset='icd9cm')[['icd9cm','icd10cm']].values) 
+    dicttest = dict(dficd.drop_duplicates(subset='icd9cm')[['icd9cm','icd10code']].values) #############
     
-    return dicticd, dictapproach
+    return dicticd, dicttest ###########
 
 # replace anetype name
 def replace_anetype(ane):
@@ -195,11 +192,32 @@ def deidentified_data(df):
     print('done')
     return df
 
+# if icd 9 code is null, replace by using opname
+opname_to_icd = {
+    'mastectomy, lt': '0HBT0',
+    'resection, breast, lt': '0HBT0',
+    'resection, breast, left': '0HBT0',
+    'mastectomy, rt': '0HBU0',
+    'mastectomy, right': '0HBU0',
+    'resection, breast, rt': '0HBU0',
+    'resection, breast, right': '0HBU0',
+    'mastectomy, bil': '0HBV0',
+    'resection, breast, bil': '0HBV0',
+    'gdc, embo': '03VG3',
+    'repair of inguinal hernia': '0WQF0',
+    'thyroidectomy, left': '0GBG0',
+    'thyroidectomy, lt': '0GBG0',
+    'thyroidectomy, right': '0GBH0',
+    'thyroidectomy, rt': '0GBH0',
+    'thyroidectomy, bil': '0GBJ0'
+}
+
 # make operations table
 def make_operations_table(dtstart, dtend):
     col_list = ['opid', 'subject_id', 'orin', 'outtime', 'anstarttime', 'anendtime', 'opstarttime', 'opendtime', 'admissiontime', 'dischargetime', 'deathtime_inhosp', 'opname', 'age', 'gender', 'height', 'weight', 'asa', 'emop', 'department', 'icd10_pcs', 'anetype', 'caseid']
 
-    sql = f'SELECT opid, hid, orin, orout, aneinfo_anstart, aneinfo_anend, opstart, opend, admission_date, discharge_date, death_time, opname, ROUND(age,-1), sex, ROUND(height), ROUND(weight), premedi_asa, em_yn, dept, replace(icd9_cm_code, ".", ""), aneinfo_anetype, caseid FROM operations WHERE opid > {dtstart} and opid < {dtend} and age >= 18 and age <= 90 and anetype != "국소" and orin IS NOT NULL and orout IS NOT NULL and admission_date IS NOT NULL and discharge_date IS NOT NULL and grp = "OR"'
+    # ROUND(age,-1)
+    sql = f'SELECT opid, hid, orin, orout, aneinfo_anstart, aneinfo_anend, opstart, opend, admission_date, discharge_date, death_time, opname, ROUND(age/5)*5 , sex, ROUND(height), ROUND(weight), premedi_asa, em_yn, dept, replace(icd9_cm_code, ".", ""), aneinfo_anetype, caseid FROM operations WHERE opid > {dtstart} and opid < {dtend} and age >= 18 and age <= 90 and anetype != "국소" and orin IS NOT NULL and orout IS NOT NULL and admission_date IS NOT NULL and discharge_date IS NOT NULL and grp = "OR"'
 
     cur.execute(sql)
     dfor = pd.DataFrame(cur.fetchall(), columns=col_list).fillna('')
@@ -215,14 +233,22 @@ def make_operations_table(dtstart, dtend):
     # add column : hadm_hid
     dfor['hadm_id'] = '' 
     
-    # add approach column
-    dicticd, dictapproach = icd9_to_icd10_code()
-    dfor['approach'] = dfor['icd10_pcs'].map(dictapproach)
-    dfor.loc[dfor['opname'].str.contains('robot|laparo|hystero', na=False, case=False), 'approach'] = 'videoscope'
-    dfor['approach'].fillna('open', inplace=True)
-    
-    # replace 9 with 10 code
+    # add videoscopic column
+    dicticd, dicttest = icd9_to_icd10_code()
+    dfor['icd_10_code'] = dfor['icd10_pcs'].map(dicttest) #############
     dfor['icd10_pcs'] = dfor['icd10_pcs'].map(dicticd)
+    
+    for key, value in opname_to_icd.items():
+        keys = '^'+''.join([f'(?=.*{w})' for w in key.split(', ')])
+        dfor.loc[(dfor['icd10_pcs'].isnull()) & (dfor['opname'].str.contains(keys, na=False, case=False, regex=True)), 'icd10_pcs'] = value
+    
+    dfor.loc[dfor['icd10_pcs'].str[4]=='4|5|7|8', 'videoscopic'] = 1
+    dfor.loc[dfor['icd10_pcs'].str[4]=='0', 'videoscopic'] = 0
+        
+    video_list = ['laparosco', 'robotic', 'hysterosco', 'endosco', 'videos', 'vats']
+    dfor.loc[dfor['opname'].str.contains('|'.join(video_list), na=False, case=False), 'videoscopic'] = 1
+    
+    dfor['icd10_pcs'] = dfor['icd10_pcs'].str[:4]
     
     # replace anetype title
     dfor['anetype'] = dfor.apply(lambda x: replace_anetype(x['anetype']), axis=1)
@@ -234,8 +260,8 @@ def make_operations_table(dtstart, dtend):
     
     # replace emop column
     dfor.loc[dfor['emop']=='Y', 'emop'] = 1
-    dfor.loc[(dfor['emop']=='N')|(dfor['emop']=='정'), 'emop'] = 0
-    
+    dfor.loc[dfor['emop']=='N|정', 'emop'] = 0
+        
     return dfor
 
 # make labevents table
@@ -409,7 +435,7 @@ def make_vital_labeling(dfor):
     # 2. crrt, ecmo
     # sql = SELECT icuid, icuroom, hid, icuin, icuout FROM `admissions` WHERE icuout > '2011-01-01' and icuin < '2020-12-31'
     print('ecmo...crrt...', end='')
-    dfce = pd.read_excel('ecmo_crrt_2020_sample_data.xlsx', skiprows=1, usecols=['환자번호','[간호기록]기록작성일시','Entity','Value'], parse_dates=['[간호기록]기록작성일시'])
+    dfce = pd.read_csv('ecmo_crrt_data_total.csv.xz', usecols=['환자번호','[간호기록]기록작성일시','Entity','Value'], parse_dates=['[간호기록]기록작성일시'])
     dfce.columns= ['subject_id','charttime','entity','value']
     dfce.loc[dfce['entity']=='혈액투석', 'entity'] = 'crrt'
     dfce.loc[dfce['entity']=='Extracorporeal Membrane Oxygenator', 'entity'] = 'ecmo'
@@ -445,12 +471,9 @@ def make_vital_labeling(dfor):
             
     # 3. mv
     print('mv...', end='')
-    dfmvgcs = pd.read_excel('mv_gcs_2020_sample_data.xlsx', skiprows=1, usecols=['환자번호','[간호기록]기록작성일시','Attribute','Value'], parse_dates=['[간호기록]기록작성일시'], sheet_name=None)
-    dfmvgcs = pd.concat([value.assign(sheet_source=key) for key,value in dfmvgcs.items()], ignore_index=True).drop('sheet_source', axis=1)
+    dfmvgcs = pd.read_csv('mv_gcs_total.csv.xz', skiprows=1, usecols=['환자번호','[간호기록]기록작성일시','Attribute','Value'], parse_dates=['[간호기록]기록작성일시'])
     dfmvgcs.columns = ['subject_id','charttime','attribute','value']
     dfmvgcs = dfmvgcs[~((dfmvgcs['attribute']=='ventilator 모드 종류') & (dfmvgcs['value']=='NIV-NAVA'))] # excluding NIV
-    
-    dfmvgcs = pd.read_csv('mv_gcs_2020_sample_data.csv.xz', parse_dates=['charttime'])
     
     # if not included in dtsart and dtend, should be removed because of null value
     dfmerge = pd.merge(dfmvgcs, dfor[['opid', 'orin', 'admissiontime', 'subject_id', 'dischargetime']], how='left', on = 'subject_id')
@@ -575,7 +598,7 @@ diagnosis_df = deidentified_data(diagnosis_df)
 convert_col_list = ['outtime','anstarttime','anendtime','opstarttime','opendtime','admissiontime','dischargetime','deathtime_inhosp']
 for col in convert_col_list:
     operations_df[col] = operations_df.apply(lambda x: convert_to_relative_time(x['orin'], x[col]), axis=1) 
-operations_df.drop(['orin', 'opname', 'dehid', 'hid_adm'], axis=1, inplace=True)
+operations_df.drop(['orin', 'dehid', 'hid_adm'], axis=1, inplace=True) ########opname
 
 # save test file
 operations_df.to_csv('201101_operations_test.csv', index=False, encoding='utf-8-sig')
