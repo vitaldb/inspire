@@ -9,6 +9,11 @@ INPUT_VARS = ['age', 'sex', 'emop', 'bmi', # 'andur',
 
 # Load operations
 df = pd.read_csv('operations.csv')
+
+# find the first operation for each patient
+df.sort_values('orin_time', inplace=True)
+df = df.loc[df[['op_id','subject_id']].groupby('subject_id')['op_id'].idxmin()]
+
 df[OUTCOME_VAR] = (df['inhosp_death_time'] < df['orout_time'] + 30 * 24 * 60)
 df = df[(df['asa'] < 6)]
 df.loc[:, 'andur'] = df['anend_time'] - df['anstart_time']
@@ -28,8 +33,6 @@ for item_name in ('hb', 'platelet', 'aptt', 'wbc', 'ptinr', 'glucose', 'bun', 'a
     df.rename(columns={'value':f'preop_{item_name}'}, inplace=True)
 
 df['sex'] = df['sex'] == 'M'
-
-df.to_csv('inspire.csv', encoding='utf-8-sig', index=False)
 
 #print(df.astype({'inhosp_death_30day':int}).quantile([0, 0.25, 0.5, 0.75, 1]))
 # Split a dataset into train and test sets
