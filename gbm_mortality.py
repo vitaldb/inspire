@@ -3,7 +3,7 @@ import pandas as pd
 
 # Set variables
 OUTCOME_VAR = 'inhosp_death_30day'
-INPUT_VARS = ['age', 'sex', 'emop', 'bmi', # 'andur', 
+INPUT_VARS = ['age', 'sex', 'emop', 'bmi', 'andur', 
               'preop_hb', 'preop_platelet', 'preop_wbc', 'preop_aptt', 'preop_ptinr', 'preop_glucose',
               'preop_bun', 'preop_albumin', 'preop_ast', 'preop_alt', 'preop_creatinine', 'preop_sodium', 'preop_potassium']
 
